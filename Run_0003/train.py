@@ -8,14 +8,11 @@ from data_preparation.transformers import ColumnExtractor, LetterCountTransforme
     NanToZeroTransformer, MultiColumnLabelEncoder, LetterExtractionTransformer, DenseTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
-from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+
 
 the_settings = settings.Settings()
-"""
-One goal I have is to create a 'record' of every attempt in the database
-It's kinda like logging, but I want to create a 'run_id' along with logs
-"""
+
 
 def do_the_deal():
     """
@@ -25,6 +22,7 @@ def do_the_deal():
     model_persistor = PersistModel(the_settings.saved_object_directory, project_name=the_settings.competiton_name)
     try:
         logging.info("Beginning {}".format(model_persistor.get_log_context()))
+        model_persistor.add_note('Trying to match best score')
         train_data = get_train_data()
         test_data = get_test_data()
         train_data_features, test_data_features = extract_features(train_data, test_data, model_persistor)
@@ -79,6 +77,10 @@ def extract_features(train_data, test_data=None, model_persistor=None):
     :param test_data:  Test data
     :param model_persistor: An instance of PersistModel.  When passed, supporting objects can be added
     """
+
+    # ADD TO THE NOTES EXPLAINING WHAT YOU ARE DOING WITH THE FEATURE EXTRACTION
+    model_persistor.add_note(" Extract Features now includes...")
+
     if test_data is not None:
         data_to_process = pd.concat([train_data[the_settings.all_features], test_data[the_settings.all_features]], ignore_index=True)
     else:
@@ -86,10 +88,7 @@ def extract_features(train_data, test_data=None, model_persistor=None):
 
     # I want to try some dimensionality reduction with this one.
     # First I'm going to start with all of the previous features and
-    # and them do a PCA
-    # I have to convert to dense matrixes
-    # I'll probably also normalize...but not at first.
-    model_persistor.add_note("This run includes to_dense")
+
     feature_extraction = Pipeline([
     ('initial features', FeatureUnion(
         [('numeric_features_standardized', Pipeline([
@@ -111,8 +110,7 @@ def extract_features(train_data, test_data=None, model_persistor=None):
             , ('label', MultiColumnLabelEncoder())
             , ('one_hot', OneHotEncoder(sparse=False))
         ]))
-    ])),
-    ('pca', PCA())
+    ]))
     ])
 
     fitted_feature_model = feature_extraction.fit(data_to_process)
@@ -128,7 +126,7 @@ def get_model():
     """
     Returns a model along with any preparation
     """
-    return LogisticRegression(random_state=1)
+    return RandomForestClassifier(n_estimators=100)
 
 
 def score_the_model(model, X, y, model_persistor):

@@ -5,17 +5,15 @@ import json
 from persistance.execution_context import PersistModel, FileObjectType
 from sklearn.pipeline import FeatureUnion, Pipeline
 from data_preparation.transformers import ColumnExtractor, LetterCountTransformer, NaNCountTransformer, \
-    NanToZeroTransformer, MultiColumnLabelEncoder, LetterExtractionTransformer, DenseTransformer
+    NanToZeroTransformer, MultiColumnLabelEncoder, LetterExtractionTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import cross_validation
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.grid_search import BaseSearchCV, GridSearchCV
+from sklearn.cross_validation import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.decomposition import PCA
-
 the_settings = settings.Settings()
-"""
-One goal I have is to create a 'record' of every attempt in the database
-It's kinda like logging, but I want to create a 'run_id' along with logs
-"""
+
 
 def do_the_deal():
     """
@@ -24,30 +22,59 @@ def do_the_deal():
     # Stage
     model_persistor = PersistModel(the_settings.saved_object_directory, project_name=the_settings.competiton_name)
     try:
-        logging.info("Beginning {}".format(model_persistor.get_log_context()))
+        logging.info('Beginning {}'.format(model_persistor.get_log_context()))
+        model_persistor.add_note('Working through GridSearch')
+        logging.info('Getting training data')
         train_data = get_train_data()
+
+        logging.info('Getting testing data')
         test_data = get_test_data()
+
+        logging.info('Extracting features')
         train_data_features, test_data_features = extract_features(train_data, test_data, model_persistor)
         # In this case, we included test_data_features so that we could encode
         # as many features as we could know about
 
         # Use train data for classifier.
-        X_train = train_data_features
-        y_train = train_data[the_settings.target]
+        X = train_data_features
+        y = train_data[the_settings.target]
 
-        model_persistor.add_object_to_save(X_train, FileObjectType.train_feature)
-        model_persistor.add_object_to_save(y_train, FileObjectType.train_target)
+        model_persistor.add_object_to_save(X, FileObjectType.train_feature)
+        model_persistor.add_object_to_save(y, FileObjectType.train_target)
+
+        # Split the training data into train and test for model validation
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25 )
+
         model = get_model()
-        score = score_the_model(model, X_train, y_train,model_persistor)
 
-        #do final fit with all of the data
+        # Fit the model
+        logging.info('Fitting model on training data')
         model.fit(X_train, y_train)
-        model_persistor.add_object_to_save(model, FileObjectType.predictor_model)
+
+        if(isinstance(model, BaseSearchCV)):
+            model_persistor.add_object_to_save(model, FileObjectType.grid_search)
+            model_persistor.add_grid_scores(model.grid_scores_)
+            model_to_save = model.best_estimator_
+        else:
+            model_to_save = model
+
+        # Score the model with the test data
+        logging.info('Scoring the model with test data')
+        score = score_the_model(model_to_save , X_test, y_test, model_persistor)
+
         model_persistor.add_note("score = {}".format(score))
         logging.info(score)
+
+        #do final fit with all of the data
+        logging.info('Fitting model on all available data')
+        model_to_save.fit(X, y)
+
+        model_persistor.add_object_to_save(model_to_save, FileObjectType.predictor_model)
+
         logging.info("Ending {}".format(model_persistor.get_log_context()))
+
     except BaseException as e:
-        model_persistor.add_note("There was an error.  Check the logs for more details. {}", str(e))
+        model_persistor.add_note("There was an error.  Check the logs for more details. {}".format(str(e)))
         logging.exception("Unexpected Error")
     finally: # I may should pull this out of the handler.
         model_persistor.save_all()
@@ -79,6 +106,10 @@ def extract_features(train_data, test_data=None, model_persistor=None):
     :param test_data:  Test data
     :param model_persistor: An instance of PersistModel.  When passed, supporting objects can be added
     """
+
+    # ADD TO THE NOTES EXPLAINING WHAT YOU ARE DOING WITH THE FEATURE EXTRACTION
+    model_persistor.add_note(" Extract Features for Grid Search")
+
     if test_data is not None:
         data_to_process = pd.concat([train_data[the_settings.all_features], test_data[the_settings.all_features]], ignore_index=True)
     else:
@@ -86,10 +117,7 @@ def extract_features(train_data, test_data=None, model_persistor=None):
 
     # I want to try some dimensionality reduction with this one.
     # First I'm going to start with all of the previous features and
-    # and them do a PCA
-    # I have to convert to dense matrixes
-    # I'll probably also normalize...but not at first.
-    model_persistor.add_note("This run includes to_dense")
+
     feature_extraction = Pipeline([
     ('initial features', FeatureUnion(
         [('numeric_features_standardized', Pipeline([
@@ -106,13 +134,12 @@ def extract_features(train_data, test_data=None, model_persistor=None):
             , ('one_hot', OneHotEncoder(sparse=False))
             ]))
 
-            , ('v22_standardized', Pipeline([
+            ,('v22_standardized', Pipeline([
             ('extract', LetterExtractionTransformer(the_settings.special_string_features))
             , ('label', MultiColumnLabelEncoder())
             , ('one_hot', OneHotEncoder(sparse=False))
+            ]))
         ]))
-    ])),
-    ('pca', PCA())
     ])
 
     fitted_feature_model = feature_extraction.fit(data_to_process)
@@ -123,12 +150,30 @@ def extract_features(train_data, test_data=None, model_persistor=None):
 
     return extracted_features[:len(train_data)], extracted_features[len(train_data):]
 
-
 def get_model():
     """
     Returns a model along with any preparation
     """
-    return LogisticRegression(random_state=1)
+    """
+    param_grid = dict(
+        criterion=['gini', 'entropy'],
+        n_estimators=[10, 100, 250, 500],
+        max_features=['auto', 'log2', None],
+        random_state=[5])
+
+    param_grid = dict(
+        criterion=['entropy'],
+        n_estimators=[100],
+        max_features=[None],
+        random_state=[5])
+    """
+    param_grid = dict(
+        penalty=['l1', 'l2'],
+        tol=[1e-6, 1e-5],
+        random_state=[5])
+
+    # return GridSearchCV(RandomForestClassifier(), param_grid, scoring='log_loss', verbose=100)
+    return GridSearchCV(LogisticRegression(), param_grid, scoring='log_loss', verbose=100, n_jobs=-2)
 
 
 def score_the_model(model, X, y, model_persistor):

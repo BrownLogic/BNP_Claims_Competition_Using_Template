@@ -8,7 +8,7 @@ from data_preparation.transformers import ColumnExtractor, LetterCountTransforme
     NanToZeroTransformer, MultiColumnLabelEncoder, LetterExtractionTransformer, DenseTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.decomposition import PCA
 
 the_settings = settings.Settings()
@@ -128,7 +128,7 @@ def get_model():
     """
     Returns a model along with any preparation
     """
-    return LogisticRegression(random_state=1)
+    return RandomForestClassifier(n_estimators=100)
 
 
 def score_the_model(model, X, y, model_persistor):
